@@ -14,7 +14,7 @@ class OnlineLearner():
         
     def evaluate(self, idx):
         acc = []
-        for i, ds_val in tqdm.tqdm(enumerate(self.test_datasets[:idx])):
+        for i, ds_val in enumerate(self.test_datasets[:idx]):
             dl = torch.utils.data.DataLoader(ds_val, batch_size=1000)
             self.model.eval()
             correct, counts = 0, 0
@@ -25,10 +25,10 @@ class OnlineLearner():
                 correct += (pred == y).sum().item()
                 counts += x.shape[0]
             acc.append(correct/counts)
-        
+        print(f"Test accuracy: {acc}")
         return np.array(acc).mean()
     
-    def train(self, dataset, iters):
+    def train(self, dataset, iters, idx):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.cfg['lr'], betas=(0.9, 0.999))
         self.model.train()
         iters_left = 1
@@ -48,26 +48,29 @@ class OnlineLearner():
             loss.backward()
             optimizer.step()
             progress_bar.set_description(
-            '<CLASSIFIER> | training loss: {loss:.3} | training accuracy: {prec:.3}% |'
-                .format(loss=loss.item(), prec=accuracy)
+            'Task {no} | training loss: {loss:.3} | training accuracy: {prec:.3}% |'
+                .format(no=idx, loss=loss.item(), prec=accuracy)
             )
             progress_bar.update(1)
         progress_bar.close()
             
     def train_all(self):
         for i in range(self.cfg['num_task']):
-            self.train(self.train_datasets[i], self.cfg['epoch'])
-            print(self.evaluate(i))
+            self.train(self.train_datasets[i], self.cfg['epoch'], idx=i+1)
+            print(f"Avg Test Accuracy: {self.evaluate(i+1): .3f}")
         
-        
-cfg = {"device": 'cuda',
-       "num_task": 5,
-       "num_class": 10,
-       "seed": 42,
-       "batch_size": 256,
-       "lr": 0.0001,
-       "epoch": 200
-    }
 
-l = OnlineLearner(cfg)
-l.train_all()
+
+
+if __name__ == '__main__':        
+    cfg = {"device": 'cuda',
+        "num_task": 10,
+        "num_class": 10,
+        "seed": 42,
+        "batch_size": 256,
+        "lr": 0.0001,
+        "epoch": 200
+        }
+
+    l = OnlineLearner(cfg)
+    l.train_all()

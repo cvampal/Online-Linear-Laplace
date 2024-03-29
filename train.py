@@ -2,7 +2,7 @@ import numpy as np
 import tqdm
 import torch
 from torchvision import datasets, transforms
-from model import MLP
+from model import MLP, estimate_fisher
 from dataset import *
 
 class OnlineLearner():
@@ -11,6 +11,9 @@ class OnlineLearner():
         self.device = torch.device(cfg['device'])
         self.train_datasets, self.test_datasets = get_permuted_MNIST(num_task=cfg['num_task'], seed=cfg['seed'])
         self.model = MLP(output_size=cfg['num_class']).to(self.device)
+        self.current_parameter = {}
+        self.current_fisher = {}
+        self.validation_acc = []
         
     def evaluate(self, idx):
         acc = []
@@ -25,7 +28,7 @@ class OnlineLearner():
                 correct += (pred == y).sum().item()
                 counts += x.shape[0]
             acc.append(correct/counts)
-        print(f"Test accuracy: {acc}")
+        #print(f"Test accuracy: {acc}")
         return np.array(acc).mean()
     
     def train(self, dataset, iters, idx):
@@ -43,7 +46,17 @@ class OnlineLearner():
             y = y.to(self.device)
             optimizer.zero_grad()
             y_hat = self.model(x)
-            loss = torch.nn.functional.cross_entropy(input=y_hat, target=y, reduction='mean')
+            classifier_loss = torch.nn.functional.cross_entropy(input=y_hat, target=y, reduction='mean')
+            if idx>1 and (self.cfg["train_mode"] == "online_laplace_diagonal"):
+                laplace_loss = []
+                for n, p in self.model.named_parameters():
+                    map_parameter = self.current_parameter[n]
+                    fisher = self.current_fisher[n]
+                    laplace_loss.append((fisher*(p-map_parameter)**2).sum() )
+                laplace_loss = 0.5 * sum(laplace_loss)
+            else:
+                laplace_loss = 0
+            loss = classifier_loss + laplace_loss
             accuracy = (y == y_hat.max(1)[1]).sum().item()*100 / x.size(0)
             loss.backward()
             optimizer.step()
@@ -53,23 +66,40 @@ class OnlineLearner():
             )
             progress_bar.update(1)
         progress_bar.close()
+    
+    
+    def update_laplace_estimate(self, dataset, weight=1.0):
+        fisher, self.current_parameter = estimate_fisher(self.model, dataset, n_samples=self.cfg['n_samples_fisher'], device=self.device)
+        if self.current_fisher :
+            for n, p in fisher.items():
+                self.current_fisher[n] += fisher[n] * weight
+        else:
+            self.current_fisher = fisher
             
     def train_all(self):
         for i in range(self.cfg['num_task']):
             self.train(self.train_datasets[i], self.cfg['epoch'], idx=i+1)
-            print(f"Avg Test Accuracy: {self.evaluate(i+1): .3f}")
-        
+            acc = self.evaluate(i+1)
+            self.validation_acc.append(acc)
+            print(f"Avg Test Accuracy: {acc: .3f}")
+            if  (self.cfg["train_mode"] == "online_laplace_diagonal"):
+                self.update_laplace_estimate(self.train_datasets[i])
+                
+        torch.save(torch.tensor(self.validation_acc), f"./plots/{self.cfg['train_mode']}.pt")
 
 
 
 if __name__ == '__main__':        
     cfg = {"device": 'cuda',
-        "num_task": 10,
+        "num_task": 50,
         "num_class": 10,
         "seed": 42,
-        "batch_size": 256,
-        "lr": 0.0001,
-        "epoch": 200
+        "batch_size": 128,
+        "lr": 0.01,
+        "epoch": 200,
+        "train_mode": 'online_laplace_diagonal',
+        "n_samples_fisher": 200,
+        
         }
 
     l = OnlineLearner(cfg)

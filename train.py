@@ -52,6 +52,7 @@ class OnlineLearner():
     
     def get_ewc_loss(self, model, current_fisher, map_parameters):
         ewc_loss = []
+        # EWC Loss, L = 0.5 * sum( fisher * (theta - theta*)^2 )
         for n, p in model.named_parameters():
             # map_parameter = parameter[n]
             fisher = current_fisher[n]
@@ -104,6 +105,7 @@ class OnlineLearner():
     
     def update_laplace_estimate(self, dataset, weight=1.0):
         fisher, self.current_parameter = estimate_fisher(self.model, dataset, n_samples=self.cfg['n_samples_fisher'], device=self.device)
+        # Store all the MAP parameters
         self.map_parameters.append(self.current_parameter)
         if self.current_fisher :
             for n, p in fisher.items():
@@ -150,7 +152,7 @@ if __name__ == '__main__':
     cfg_norm = cnfgs[4]
     
     # Change this to select a specific configuration
-    l = OnlineLearner(cfg_ewc)
+    l = OnlineLearner(cfg_norm)
     
     # Comment this when training on cumulative datasets, otherwise uncomment
     l.train_all()

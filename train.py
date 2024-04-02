@@ -87,20 +87,51 @@ class OnlineLearner():
                 
         torch.save(torch.tensor(self.validation_acc), f"./plots/{self.cfg['train_mode']}.pt")
 
+    def train_cumulative(self):
+        for i in range(self.cfg['num_task']):
+            
+            #Train on all the previous datasets
+            # for j in range(i+1):
+            #     self.train(self.train_datasets[j], self.cfg['epoch'], idx=j+1)
+            temp_dataset = torch.utils.data.ConcatDataset(self.train_datasets[:i+1])
+            self.train(temp_dataset, self.cfg['epoch'], idx=i+1)
+            acc = self.evaluate(i+1)
+            self.validation_acc.append(acc)
+            print(f"Avg Test Accuracy: {acc: .3f}")
+                
+        torch.save(torch.tensor(self.validation_acc), f"./plots/{self.cfg['train_mode']}.pt")
 
+    def print_data_shape(self):
+        for i in range(self.cfg['num_task']):
+            self.train_datasets[i] = torch.utils.data.ConcatDataset(self.train_datasets[:i+1])
+            print(f"Task {i+1}: Train: {len(self.train_datasets[i])}, Test: {len(self.test_datasets[i])}")
+        
 
-if __name__ == '__main__':        
+if __name__ == '__main__':      
+    
+    # Can update new configurations here  
+    # cfg = {"device": 'cuda',
+    #     "num_task": 50,
+    #     "num_class": 10,
+    #     "seed": 42,
+    #     "batch_size": 128,
+    #     "lr": 0.01,
+    #     "epoch": 200,
+    #     "train_mode": 'online_laplace_diagonal',
+    #     "n_samples_fisher": 200,
+        
+    #     }
+
     cfg = {"device": 'cuda',
         "num_task": 50,
         "num_class": 10,
         "seed": 42,
         "batch_size": 128,
-        "lr": 0.01,
+        "lr": 0.001,
         "epoch": 200,
-        "train_mode": 'online_laplace_diagonal',
-        "n_samples_fisher": 200,
-        
+        "train_mode": 'cumulative',        
         }
-
     l = OnlineLearner(cfg)
-    l.train_all()
+    # l.train_all()
+    l.train_cumulative()
+    # l.print_data_shape()

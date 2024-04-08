@@ -2,7 +2,7 @@ import numpy as np
 import tqdm
 import torch
 from torchvision import datasets, transforms
-from model import MLP, estimate_fisher
+from model import MLP, estimate_fisher, update_omega
 from dataset import *
 from configs import cnfgs
 class OnlineLearner():
@@ -11,12 +11,70 @@ class OnlineLearner():
         self.device = torch.device(cfg['device'])
         self.train_datasets, self.test_datasets = get_permuted_MNIST(num_task=cfg['num_task'], seed=cfg['seed'])
         self.model = MLP(output_size=cfg['num_class']).to(self.device)
-        self.current_parameter = {}
-        self.map_parameters = []
-        self.current_fisher = {}
-        self.current_si = {}
-        self.validation_acc = []
         
+        # Store the current parameter
+        self.current_parameter = {}
+        
+        # List to store the MAP parameters for all the tasks
+        self.map_parameters = []
+        
+        # Store the current fisher information matrix
+        self.current_fisher = {}
+        
+        # Store the current synaptic strength
+        self.W = {}
+        self.current_omega = {}
+        
+        self.validation_acc = []
+    
+    # Initialize the W matrix
+    def init_W(self):
+        W = {}
+        p_old = {}
+        omega_init = {}
+        for n, p in self.model.named_parameters():
+            W[n] = p.detach().clone().zero_()
+            p_old[n] = p.data.clone()  
+            omega_init[n] = p.detach().clone().zero_()  
+        return W, p_old, omega_init
+    
+    # Update the W matrix
+    def update_W(self, W):
+        for n, p in self.model.named_parameters():
+            if p.grad is not None:
+                W[n].add_(-p.grad*(p.detach()-p_old[n]))
+            # p_old[n] = p.detach().clone()
+        return W
+        
+    def get_laplace_loss(self, model, current_fisher, parameter):
+        laplace_loss = []
+        for n, p in model.named_parameters():
+            map_parameter = parameter[n]
+            fisher = current_fisher[n]
+            laplace_loss.append((fisher*(p-map_parameter)**2).sum() )
+        return 0.5 * sum(laplace_loss)
+    
+    def get_si_loss(self, model, current_omega, parameter):
+        si_loss = []
+        for n, p in model.named_parameters():
+            map_parameter = parameter[n]
+            omega = current_omega[n]
+            si_loss.append((omega*(p-map_parameter)**2).sum() )
+        return self.cfg["c"] * sum(si_loss)
+    
+    def get_ewc_loss(self, model, current_fisher, map_parameters):
+        ewc_loss = []
+        # EWC Loss, L = 0.5 * sum( fisher * (theta - theta*)^2 )
+        for n, p in model.named_parameters():
+            # map_parameter = parameter[n]
+            fisher = current_fisher[n]
+            ewc_penalty = []
+            for prev_map_parameter in map_parameters:
+                ewc_penalty.append((p-prev_map_parameter[n])**2)
+            
+            ewc_loss.append((fisher*sum(ewc_penalty)).sum() )
+        return 0.5 * sum(ewc_loss)
+    
     def evaluate(self, idx):
         acc = []
         for i, ds_val in enumerate(self.test_datasets[:idx]):
@@ -33,41 +91,14 @@ class OnlineLearner():
         #print(f"Test accuracy: {acc}")
         return np.array(acc).mean()
     
-    def get_laplace_loss(self, model, current_fisher, parameter):
-        laplace_loss = []
-        for n, p in model.named_parameters():
-            map_parameter = parameter[n]
-            fisher = current_fisher[n]
-            laplace_loss.append((fisher*(p-map_parameter)**2).sum() )
-        return 0.5 * sum(laplace_loss)
-    
-    def get_si_loss(self, model, synaptic_strength, parameter):
-        si_loss = []
-        c=0.95
-        for n, p in model.named_parameters():
-            map_parameter = parameter[n]
-            synaptic_strength = synaptic_strength[n]
-            si_loss.append((synaptic_strength*(p-map_parameter)**2).sum() )
-        return c * sum(si_loss)
-    
-    def get_ewc_loss(self, model, current_fisher, map_parameters):
-        ewc_loss = []
-        # EWC Loss, L = 0.5 * sum( fisher * (theta - theta*)^2 )
-        for n, p in model.named_parameters():
-            # map_parameter = parameter[n]
-            fisher = current_fisher[n]
-            ewc_penalty = []
-            for prev_map_parameter in map_parameters:
-                ewc_penalty.append((p-prev_map_parameter[n])**2)
-            
-            ewc_loss.append((fisher*sum(ewc_penalty)).sum() )
-        return 0.5 * sum(ewc_loss)
-    
     def train(self, dataset, iters, idx):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.cfg['lr'], betas=(0.9, 0.999))
         self.model.train()
         iters_left = 1
         progress_bar = tqdm.tqdm(range(1, iters+1))
+        
+        # Initialize the W matrix
+        self.W, self.current_parameter, self.current_omega = self.init_W()
         for batch_index in range(1, iters+1):
             iters_left -= 1
             if iters_left==0:
@@ -87,8 +118,12 @@ class OnlineLearner():
             elif idx>1 and (self.cfg["train_mode"] == "ewc_diagonal"):
                 laplace_loss = self.get_ewc_loss(self.model, self.current_fisher, self.map_parameters)
                 loss = classifier_loss + laplace_loss
-            elif idx>1 and (self.cfg["train_mode"] == "si_diagonal"):
-                si_loss = self.get_si_loss(self.model, self.current_fisher, self.current_parameter)
+            elif idx==1 and self.cfg["train_mode"] == "si_diagonal":
+                self.W = self.update_W(self.W)
+                loss = classifier_loss
+            elif idx>1 and self.cfg["train_mode"] == "si_diagonal":
+                self.W = self.update_W(self.W)
+                si_loss = self.get_si_loss(self.model, self.current_omega, self.current_parameter)
                 loss = classifier_loss + si_loss
             else:
                 loss = classifier_loss
@@ -113,8 +148,17 @@ class OnlineLearner():
         else:
             self.current_fisher = fisher
     
-    def update_si_estimate(self, dataset, weight=1.0):
-        pass
+    def update_si_estimate(self, weight=1.0):
+        self.current_omega, self.current_parameter = update_omega(model=self.model, 
+                                                                cfg=self.cfg, 
+                                                                prev_omega=self.current_omega, 
+                                                                W=self.W, 
+                                                                p_old=self.current_parameter)
+        # if self.current_omega:
+        #     for n, p in omega.items():
+        #         self.current_omega[n] += omega[n] * weight
+        # else:  
+        #     self.current_omega = omega
             
     def train_all(self):
         for i in range(self.cfg['num_task']):
@@ -127,7 +171,7 @@ class OnlineLearner():
             elif (self.cfg["train_mode"] == "ewc_diagonal"):
                 self.update_laplace_estimate(self.train_datasets[i])
             elif (self.cfg["train_mode"] == "si_diagonal"):
-                self.update_si_estimate(self.train_datasets[i])
+                self.update_si_estimate()
                 
         torch.save(torch.tensor(self.validation_acc), f"./plots/{self.cfg['train_mode']}.pt")
 
@@ -152,7 +196,7 @@ if __name__ == '__main__':
     cfg_norm = cnfgs[4]
     
     # Change this to select a specific configuration
-    l = OnlineLearner(cfg_norm)
+    l = OnlineLearner(cfg_si)
     
     # Comment this when training on cumulative datasets, otherwise uncomment
     l.train_all()

@@ -48,6 +48,40 @@ def estimate_fisher(model, dataset, n_samples, device):
         parameters[n] =  p.detach().clone()
     return est_fisher_info, parameters
 
+# Update omega for Synaptic Intelligence
+def update_omega(model, cfg, prev_omega, W, p_old):
+        '''After completing training on a task, update the per-parameter regularization strength.
+
+        [W]         <dict> estimated parameter-specific contribution to changes in total loss of completed task
+        [epsilon]   <float> dampening parameter (to bound [omega] when [p_change] goes to 0)'''
+
+        # Loop over all parameters
+        
+        for n, p in model.named_parameters():
+
+            # Find/calculate new values for quadratic penalty on parameters
+            # p_prev = getattr(model, '{}_SI_prev_task'.format(n))
+            p_prev = p_old[n]
+            p_current = p.detach().clone()
+            p_change = p_current - p_prev
+            omega_add = W[n]/(p_change**2 + cfg["epsilon"])
+            
+            omega_new = prev_omega[n] + omega_add
+
+            # If requested, clamp the value of omega
+            if cfg["omega_max"] is not None:
+                omega_new = torch.clamp(omega_new, min=0, max=cfg["omega_max"])
+
+            # Store these new values in the model
+            # model.register_buffer('{}_SI_prev_task'.format(n), p_current)
+            # model.register_buffer('{}_SI_omega'.format(n), omega_new)
+            
+        return omega_new, p_current
+
+
+
+
+
 # def update_fisher(old_fisher, new_fisher, weight=1.0):
 #     updated_fisher = {}
 #     for n, p in old_fisher.items():

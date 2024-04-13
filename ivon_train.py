@@ -57,10 +57,7 @@ class OnlineLearner():
                     y_hat = self.model(x)
                     optimizer.zero_grad()
                     classifier_loss = torch.nn.functional.cross_entropy(input=y_hat, target=y, reduction='mean')
-                    if idx >1:
-                        laplace_loss = ((self.current_hessian/idx) * (parameters_to_vector(self.model.parameters()) - self.current_parameters)**2).sum()
-                    else: 
-                        laplace_loss = 0
+                    laplace_loss = (self.current_hessian * (parameters_to_vector(self.model.parameters()) - self.current_parameters)**2).sum()
                     loss = classifier_loss + self.cfg['lambda'] * laplace_loss
                     loss.backward()
                     

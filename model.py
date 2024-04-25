@@ -15,7 +15,40 @@ class MLP(torch.nn.Module):
         out = self.l2(out.relu())
         out = self.l3(out.relu())
         return out
+   
+# create a LeNet-like architecture with two convolutional layers with 5×5 convolutions with 
+# 20 and 50 channels respectively and a fully connected hidden layer with 500 units. Use ReLU 
+# nonlinearities and perform a 2×2 max-pooling operation after each convolutional layer with stride 2 
+class CNN(torch.nn.Module):
     
+        def __init__(self, input_size=32*32, output_size=10):
+            super().__init__()
+            self.conv1 = torch.nn.Conv2d(1, 20, kernel_size=5)
+            self.conv2 = torch.nn.Conv2d(20, 50, kernel_size=5)
+            self.fc1 = torch.nn.Linear(50*4*4, 500)
+            self.fc2 = torch.nn.Linear(500, 10)
+            
+        def forward(self, x):
+            out = self.conv1(x)
+            out = F.max_pool2d(out, 2)
+            out = F.relu(out)
+            out = self.conv2(out)
+            out = F.max_pool2d(out, 2)
+            out = F.relu(out)
+            out = out.view(-1, 50*4*4)
+            out = self.fc1(out)
+            out = F.relu(out)
+            out = self.fc2(out)
+            return out
+        
+        # define a function to change the final layer of the model
+def change_final_layer(model, output_size):
+    model.fc = torch.nn.Linear(model.fc.in_features, output_size)
+    return model
+
+# define a function to save the model
+def save_model(model, path):
+    torch.save(model.state_dict(), path)
     
 def estimate_fisher(model, dataset, n_samples, device):
     est_fisher_info = {}
